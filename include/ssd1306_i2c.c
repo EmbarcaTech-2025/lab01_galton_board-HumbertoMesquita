@@ -39,30 +39,30 @@ void ssd1306_send_buffer(uint8_t ssd[], int buffer_length) {
 }
 
 // Cria a lista de comandos (com base nos endereços definidos em ssd1306_i2c.h) para a inicialização do display
-void ssd1306_init() {
-    uint8_t commands[] = {
-        ssd1306_set_display, ssd1306_set_memory_mode, 0x00,
-        ssd1306_set_display_start_line, ssd1306_set_segment_remap | 0x01, 
-        ssd1306_set_mux_ratio, ssd1306_height - 1,
-        ssd1306_set_common_output_direction | 0x08, ssd1306_set_display_offset,
-        0x00, ssd1306_set_common_pin_configuration,
+//void ssd1306_init() {
+//    uint8_t commands[] = {
+//        ssd1306_set_display, ssd1306_set_memory_mode, 0x00,
+//        ssd1306_set_display_start_line, ssd1306_set_segment_remap | 0x01, 
+//        ssd1306_set_mux_ratio, ssd1306_height - 1,
+//        ssd1306_set_common_output_direction | 0x08, ssd1306_set_display_offset,
+//        0x00, ssd1306_set_common_pin_configuration,
     
-#if ((ssd1306_width == 128) && (ssd1306_height == 32))
-    0x02,
-#elif ((ssd1306_width == 128) && (ssd1306_height == 64))
-    0x12,
-#else
-    0x02,
-#endif
-        ssd1306_set_display_clock_divide_ratio, 0x80, ssd1306_set_precharge,
-        0xF1, ssd1306_set_vcomh_deselect_level, 0x30, ssd1306_set_contrast,
-        0xFF, ssd1306_set_entire_on, ssd1306_set_normal_display,
-        ssd1306_set_charge_pump, 0x14, ssd1306_set_scroll | 0x00,
-        ssd1306_set_display | 0x01,
-    };
-
-    ssd1306_send_command_list(commands, count_of(commands));
-}
+//#if ((ssd1306_width == 128) && (ssd1306_height == 32))
+//    0x02,
+//#elif ((ssd1306_width == 128) && (ssd1306_height == 64))
+//    0x12,
+//#else
+//   0x02,
+//#endif
+//       ssd1306_set_display_clock_divide_ratio, 0x80, ssd1306_set_precharge,
+//        0xF1, ssd1306_set_vcomh_deselect_level, 0x30, ssd1306_set_contrast,
+//        0xFF, ssd1306_set_entire_on, ssd1306_set_normal_display,
+//        ssd1306_set_charge_pump, 0x14, ssd1306_set_scroll | 0x00,
+//        ssd1306_set_display | 0x01,
+//    };
+//
+//    ssd1306_send_command_list(commands, count_of(commands));
+//}
 
 // Cria a lista de comandos para configurar o scrolling
 void ssd1306_scroll(bool set) {
@@ -242,4 +242,28 @@ void ssd1306_draw_bitmap(ssd1306_t *ssd, const uint8_t *bitmap) {
 
         ssd1306_send_data(ssd);
     }
+//////////
+    
+}
+static ssd1306_t display;
+
+void ssd1306_clear(void) {
+    for (int i = 1; i < display.bufsize; i++) {
+        display.ram_buffer[i] = 0x00;
+    }
+}
+
+void ssd1306_draw_pixel(int x, int y) {
+    ssd1306_set_pixel(display.ram_buffer + 1, x, y, true);
+}
+
+void ssd1306_show(void) {
+    ssd1306_send_data(&display);
+}
+
+void ssd1306_init(void) {
+    ssd1306_init_bm(&display, 128, 64, false, 0x3C, i2c0);  // use i2c0 conforme seu define
+    ssd1306_config(&display);
+    ssd1306_clear();
+    ssd1306_show();
 }
