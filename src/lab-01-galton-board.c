@@ -1,9 +1,4 @@
-// lab-01-galton-board.c - Galton Board digital com múltiplas bolas e curva de Gauss
-// O Display OLED está conectado ao barramento I2C da BitDogLab através dos seguintes pinos:
-// SDA: GPIO14
-// SCL: GPIO15
-// O endereço do Display OLED é 0x3C.
-// Passo 3: Escrevendo o Código
+
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +6,8 @@
 #include <math.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
-#include "include/ssd1306.h"
+#include "../include/ssd1306.h"
+
 
 #define I2C_PORT i2c0
 #define I2C_SDA 14
@@ -28,7 +24,6 @@
 #define ESPACAMENTO (LARGURA_DISPLAY / COLUNAS)
 #define ALTURA_HISTOGRAMA 40
 
-// Estrutura de uma bola
 typedef struct {
     float x, y;
     int nivel;
@@ -39,22 +34,19 @@ Bola bolas[MAX_BOLAS];
 int caixas[COLUNAS];
 int total_bolas = 0;
 bool mostrar_curva = false;
+bool desbalanceado = false;
 char texto[32];
 
+extern ssd1306_t display;
+
 void inicializar_display() {
-    printf("Inicializando display...");
-    
     i2c_init(I2C_PORT, 400 * 1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
-    ssd1306_init_bm(&display, 128, 64, false, OLED_ADDR, I2C_PORT);
-    ssd1306_config(&display);
-    ssd1306_clear();
-    ssd1306_show();
-    printf("Display pronto e limpo!");
+    ssd1306_init();
 }
 
 void inicializar_botoes() {
@@ -95,10 +87,13 @@ void atualizar_bolas() {
     for (int i = 0; i < MAX_BOLAS; i++) {
         if (bolas[i].ativa) {
             if (bolas[i].nivel < NIVEIS) {
-                bolas[i].x += escolha_binaria(0.5);
+                bolas[i].x += escolha_binaria(desbalanceado ? 0.7 : 0.5);
                 bolas[i].nivel++;
             } else {
-                caixas[(int)(bolas[i].x)]++;
+                int coluna_final = (int)(bolas[i].x);
+                if (coluna_final >= 0 && coluna_final < COLUNAS) {
+                    caixas[coluna_final]++;
+                }
                 bolas[i].ativa = false;
             }
         }
@@ -127,20 +122,17 @@ void desenhar_histograma() {
     }
 }
 
-#include "include/ssd1306_i2c.h"
-
-ssd1306_t display;
-
 void desenhar_interface() {
     snprintf(texto, sizeof(texto), "Bolas: %d", total_bolas);
     ssd1306_draw_string(display.ram_buffer + 1, 0, 0, texto);
+    if (desbalanceado) {
+        ssd1306_draw_string(display.ram_buffer + 1, 70, 0, "(Desb.)");
+    }
 }
 
 int main() {
-    printf("Iniciando Galton Board...");
     stdio_init_all();
     inicializar_display();
-    sleep_ms(100);
     inicializar_botoes();
     resetar_simulacao();
     srand(time_us_32());
@@ -152,6 +144,7 @@ int main() {
         }
         if (gpio_get(BTN_CURVE)) {
             mostrar_curva = true;
+            desbalanceado = !desbalanceado;
             sleep_ms(200);
         }
 
