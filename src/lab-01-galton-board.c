@@ -1,161 +1,180 @@
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
+#include <time.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
-#include "../include/ssd1306.h"
+#include "../include/ssd1306_i2c.h"
 
-
-#define I2C_PORT i2c0
 #define I2C_SDA 14
 #define I2C_SCL 15
-#define OLED_ADDR 0x3C
-#define BTN_CURVE 5
-#define BTN_RESET 6
 
-#define LARGURA_DISPLAY 128
-#define ALTURA_DISPLAY 64
-#define MAX_BOLAS 20
-#define NIVEIS 10
-#define COLUNAS (NIVEIS + 1)
-#define ESPACAMENTO (LARGURA_DISPLAY / COLUNAS)
-#define ALTURA_HISTOGRAMA 40
+#define BOARD_WIDTH 128
+#define BOARD_HEIGHT 64
+#define PIN_ROWS 7
+#define PIN_SPACING_X 8
+#define PIN_SPACING_Y 6
+#define PIN_RADIUS 1
+#define BALL_RADIUS 1
+#define MAX_BALLS 20
+#define HISTOGRAM_BINS 16
+#define BIN_WIDTH (BOARD_WIDTH / HISTOGRAM_BINS)
+#define HISTOGRAM_HEIGHT 20
+#define HISTOGRAM_BASE (BOARD_HEIGHT - 1)
+#define BALL_SPEED 1
+#define NEW_BALL_DELAY 30
 
 typedef struct {
     float x, y;
-    int nivel;
-    bool ativa;
-} Bola;
+    int active;
+    int current_row;
+} Ball;
 
-Bola bolas[MAX_BOLAS];
-int caixas[COLUNAS];
-int total_bolas = 0;
-bool mostrar_curva = false;
-bool desbalanceado = false;
-char texto[32];
+Ball balls[MAX_BALLS];
+uint32_t histogram[HISTOGRAM_BINS] = {0};
+uint32_t total_balls = 0;
+uint32_t tick_counter = 0;
 
-extern ssd1306_t display;
+int random_binary() {
+    return rand() % 2;
+}
 
-void inicializar_display() {
-    i2c_init(I2C_PORT, 400 * 1000);
+void init_ball(Ball *ball) {
+    *ball = (Ball){ .x = BOARD_WIDTH / 2, .y = 0, .active = 1, .current_row = 0 };
+}
+
+void update_ball(Ball *ball) {
+    if (!ball->active) return;
+
+    ball->y += BALL_SPEED;
+    int row_y = (ball->current_row + 1) * PIN_SPACING_Y;
+
+    if (ball->y >= row_y && ball->current_row < PIN_ROWS) {
+        ball->x += random_binary() ? PIN_SPACING_X / 2 : -PIN_SPACING_X / 2;
+        ball->current_row++;
+    }
+
+    if (ball->y >= BOARD_HEIGHT - HISTOGRAM_HEIGHT - BALL_RADIUS) {
+        int bin = (int)ball->x / BIN_WIDTH;
+        if (bin < 0) bin = 0;
+        if (bin >= HISTOGRAM_BINS) bin = HISTOGRAM_BINS - 1;
+        histogram[bin]++;
+        total_balls++;
+        ball->active = 0;
+    }
+}
+
+void draw_circle(uint8_t *buffer, int x, int y, int radius) {
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            int px = x + dx, py = y + dy;
+            if (px >= 0 && px < BOARD_WIDTH && py >= 0 && py < BOARD_HEIGHT) {
+                ssd1306_set_pixel(buffer, px, py, true);
+            }
+        }
+    }
+}
+
+void draw_histogram(uint8_t *buffer) {
+    uint32_t max_count = 1;
+    for (int i = 0; i < HISTOGRAM_BINS; i++) {
+        if (histogram[i] > max_count) max_count = histogram[i];
+    }
+
+    for (int i = 0; i < HISTOGRAM_BINS; i++) {
+        int height = (histogram[i] * HISTOGRAM_HEIGHT) / max_count;
+        int x_start = i * BIN_WIDTH;
+        int x_end = x_start + BIN_WIDTH - 1;
+
+        for (int x = x_start; x <= x_end; x++) {
+            for (int y = HISTOGRAM_BASE; y > HISTOGRAM_BASE - height; y--) {
+                ssd1306_set_pixel(buffer, x, y, true);
+            }
+        }
+    }
+
+    for (int x = 0; x < BOARD_WIDTH; x++) {
+        ssd1306_set_pixel(buffer, x, HISTOGRAM_BASE - HISTOGRAM_HEIGHT, true);
+    }
+}
+
+void draw_pins(uint8_t *buffer) {
+    for (int row = 0; row < PIN_ROWS; row++) {
+        int y = (row + 1) * PIN_SPACING_Y;
+        int pins = row + 1;
+        int start_x = (BOARD_WIDTH - (pins - 1) * PIN_SPACING_X) / 2;
+
+        for (int i = 0; i < pins; i++) {
+            draw_circle(buffer, start_x + i * PIN_SPACING_X, y, PIN_RADIUS);
+        }
+    }
+}
+
+void draw_ball_count(uint8_t *buffer) {
+    char str[20];
+    sprintf(str, "%lu", total_balls);
+    ssd1306_draw_string(buffer, 0, 0, str);
+}
+
+void update_display(uint8_t *buffer) {
+    memset(buffer, 0, ssd1306_width * ssd1306_n_pages);
+
+    struct render_area area = {
+        .start_column = 0,
+        .end_column = ssd1306_width - 1,
+        .start_page = 0,
+        .end_page = ssd1306_n_pages - 1
+    };
+
+    draw_pins(buffer);
+
+    for (int i = 0; i < MAX_BALLS; i++) {
+        if (balls[i].active) {
+            draw_circle(buffer, (int)balls[i].x, (int)balls[i].y, BALL_RADIUS);
+        }
+    }
+
+    draw_histogram(buffer);
+    draw_ball_count(buffer);
+
+    calculate_render_area_buffer_length(&area);
+    render_on_display(buffer, &area);
+}
+
+int main() {
+    stdio_init_all();
+    srand(time(NULL));
+
+    i2c_init(i2c1, ssd1306_i2c_clock * 1000);
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2C_SDA);
     gpio_pull_up(I2C_SCL);
 
     ssd1306_init();
-}
 
-void inicializar_botoes() {
-    gpio_init(BTN_CURVE);
-    gpio_set_dir(BTN_CURVE, GPIO_IN);
-    gpio_pull_down(BTN_CURVE);
-
-    gpio_init(BTN_RESET);
-    gpio_set_dir(BTN_RESET, GPIO_IN);
-    gpio_pull_down(BTN_RESET);
-}
-
-void resetar_simulacao() {
-    memset(caixas, 0, sizeof(caixas));
-    memset(bolas, 0, sizeof(bolas));
-    total_bolas = 0;
-    mostrar_curva = false;
-}
-
-int escolha_binaria(float peso_direita) {
-    return ((float)rand() / RAND_MAX) < peso_direita ? 1 : 0;
-}
-
-void adicionar_bola() {
-    for (int i = 0; i < MAX_BOLAS; i++) {
-        if (!bolas[i].ativa) {
-            bolas[i].x = COLUNAS / 2.0;
-            bolas[i].y = 0;
-            bolas[i].nivel = 0;
-            bolas[i].ativa = true;
-            total_bolas++;
-            break;
-        }
-    }
-}
-
-void atualizar_bolas() {
-    for (int i = 0; i < MAX_BOLAS; i++) {
-        if (bolas[i].ativa) {
-            if (bolas[i].nivel < NIVEIS) {
-                bolas[i].x += escolha_binaria(desbalanceado ? 0.7 : 0.5);
-                bolas[i].nivel++;
-            } else {
-                int coluna_final = (int)(bolas[i].x);
-                if (coluna_final >= 0 && coluna_final < COLUNAS) {
-                    caixas[coluna_final]++;
-                }
-                bolas[i].ativa = false;
-            }
-        }
-    }
-}
-
-void desenhar_histograma() {
-    int max = 1;
-    for (int i = 0; i < COLUNAS; i++) {
-        if (caixas[i] > max) max = caixas[i];
-    }
-
-    for (int i = 0; i < COLUNAS; i++) {
-        int altura = (caixas[i] * ALTURA_HISTOGRAMA) / max;
-        for (int y = 0; y < altura; y++) {
-            ssd1306_draw_pixel(i * ESPACAMENTO + 2, ALTURA_DISPLAY - 1 - y);
-        }
-
-        if (mostrar_curva) {
-            float media = NIVEIS / 2.0;
-            float desvio = sqrt(NIVEIS) / 2.0;
-            float expoente = -pow(i - media, 2) / (2 * desvio * desvio);
-            int curva_y = (int)(exp(expoente) * ALTURA_HISTOGRAMA);
-            ssd1306_draw_pixel(i * ESPACAMENTO + 2, ALTURA_DISPLAY - 1 - curva_y);
-        }
-    }
-}
-
-void desenhar_interface() {
-    snprintf(texto, sizeof(texto), "Bolas: %d", total_bolas);
-    ssd1306_draw_string(display.ram_buffer + 1, 0, 0, texto);
-    if (desbalanceado) {
-        ssd1306_draw_string(display.ram_buffer + 1, 70, 0, "(Desb.)");
-    }
-}
-
-int main() {
-    stdio_init_all();
-    inicializar_display();
-    inicializar_botoes();
-    resetar_simulacao();
-    srand(time_us_32());
+    uint8_t buffer[ssd1306_width * ssd1306_n_pages] = {0};
+    memset(balls, 0, sizeof(balls));
 
     while (true) {
-        if (gpio_get(BTN_RESET)) {
-            resetar_simulacao();
-            sleep_ms(200);
-        }
-        if (gpio_get(BTN_CURVE)) {
-            mostrar_curva = true;
-            desbalanceado = !desbalanceado;
-            sleep_ms(200);
+        tick_counter++;
+
+        if (tick_counter % NEW_BALL_DELAY == 0) {
+            for (int i = 0; i < MAX_BALLS; i++) {
+                if (!balls[i].active) {
+                    init_ball(&balls[i]);
+                    break;
+                }
+            }
         }
 
-        adicionar_bola();
-        atualizar_bolas();
+        for (int i = 0; i < MAX_BALLS; i++) {
+            update_ball(&balls[i]);
+        }
 
-        ssd1306_clear();
-        desenhar_histograma();
-        desenhar_interface();
-        ssd1306_show();
-        sleep_ms(150);
+        update_display(buffer);
+        sleep_ms(50);
     }
+
     return 0;
 }
